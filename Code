@@ -1,0 +1,485 @@
+# Environmental Statistics
+# Dominik Pintilie
+# M.Sc. Hydrology
+# StudentID: 4312669
+
+
+# Packages
+install.packages("tidyverse")
+install.packages("lubridate")
+install.packages("zoo")
+install.packages("ismev")
+install.packages("evd")
+install.packages("goftest")
+install.packages("ADGofTest")
+install.packages("extRemes")
+install.packages("trend")
+install.packages("changepoint")
+install.packages("writexl")
+
+library(tidyverse)
+library(lubridate)
+library(zoo)
+library(ismev)
+library(evd)
+library(goftest)
+library(ADGofTest)
+library(extRemes)
+library(trend)
+library(changepoint)
+library(writexl)
+
+#Funktionen
+meanNA <- function(x){mean(x, na.rm = TRUE)}
+minNA <- function(x){min(x, na.rm = TRUE)}
+maxNA <- function(x){max(x, na.rm = TRUE)}       
+sumMissing <- function(x){sum(is.na(x))}    
+
+# Daten einlesen
+Pfinz <- read.csv("C:/Users/domin/OneDrive - bwedu/Master/2. Semester/Environmental Statistics/Projekt/Pfinz_Berghausen_streamflow.csv",
+                  dec = ",")
+
+# Dataframe aufbereiten (nur nötige Informatonen)
+Pfinz <- Pfinz[,-c(1:4,7,8)]
+colnames(Pfinz) <- c("date", "Q")
+Pfinz$date <- dmy_hm(Pfinz$date)
+Pfinz$month <- month(Pfinz$date)
+Pfinz$year <- year(Pfinz$date)
+
+# cutting to calendar year
+head(Pfinz)
+which(Pfinz$date=="1960-01-01 UTC")
+Pfinz$date[185]
+Pfinz <- Pfinz[-c(1:184),]
+
+
+################################################################################
+# Task 1
+################################################################################
+#-------------------------------------------------------------------------------
+# a)
+#-------------------------------------------------------------------------------
+# monthly means
+monthlymeans <- aggregate(Q ~ month, FUN= mean,data = Pfinz)
+monthlymeans$monthabr <- month.abb
+
+# annual maxima and their timing
+annual_max <- Pfinz %>% 
+  mutate(month=month(date), year=year(date)) %>% 
+  group_by(year) %>% 
+  summarise(annual_maximum=maxNA(Q), time_of_max=date[which(Q==maxNA(Q))])
+
+# annual flow index (NM7Q $ NM21Q)
+Pfinz$NM7Q <- rollapply(Pfinz$Q, 7, mean, fill = NA) 
+NM7Q <- aggregate(data = Pfinz, NM7Q ~ year, FUN = minNA)
+Pfinz$NM21Q <- rollapply(Pfinz$Q, 21, mean, fill = NA)
+NM21Q <- aggregate(data = Pfinz, NM21Q ~ year, FUN = minNA)
+
+#-------------------------------------------------------------------------------
+# b)
+#-------------------------------------------------------------------------------
+# prepare Data
+monthly_mean <- Pfinz %>% group_by(year,month) %>% 
+                summarise(month_Q = meanNA(Q))
+monthly_mean$monthabr <- month.abb[monthly_mean$month]
+
+jahrtest <- Pfinz %>% group_by(year) %>% 
+  summarise(test = meanNA(Q))
+
+a <- jahrtest %>%  do(data.frame( column = rep(.$test,each = 12))) 
+monthly_mean$year_Q <- a$column
+monthly_mean$parde <- monthly_mean$month_Q / monthly_mean$year_Q
+  
+
+# package for better visualisation of the color-ramp
+install.packages("wesanderson")
+library(wesanderson)
+pal <- (wes_palette("Zissou1", 100, type = "continuous"))
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+cbbPalette <- c("#000000","#E69F00", "#0072B2", "#D55E00",  "red")
+# Plot of heatmap
+level_order <- c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+ggplot(data = monthly_mean, aes(x = factor(monthabr, level = level_order )  , y=year)) +
+  geom_tile(aes(fill = month_Q)) +
+#  scale_fill_gradientn(colours = c("red", "grey", "blue")) +
+  scale_fill_gradientn(colours = pal) +
+  xlab("") +
+  ylab("") +
+  theme(text = element_text(size = 30), plot.title = element_text(hjust = 0.5)) +
+  labs(fill="Q [m³/s]")  +
+  ggtitle(label = "mittlere monatliche Abflüsse der Pfinz 1960-2020")
+
+# plot Pardé Koeffizient
+ggplot(data = monthly_mean, aes(x = factor(monthabr, level = level_order )  , y=year)) +
+  geom_tile(aes(fill = parde)) +
+  scale_fill_gradientn(colours = pal) +
+  xlab("") +
+  ylab("") +
+  labs(fill="Pardé\nKoeffizient") +
+  theme(text = element_text(size = 30), plot.title = element_text(hjust = 0.5)) +
+  ggtitle(label = "Pardé Koeffizienten der Pfinz 1960-2020")
+
+
+# Time series of extreme values
+# Highflow
+plot(annual_max$year, annual_max$annual_maximum, type = "l")
+l1 <- loess(annual_max$annual_maximum ~ annual_max$year, span = 0.15)
+lines(l1$x, l1$fitted, col = "red")
+
+# mitt GGplot
+ggplot(annual_max, aes(x = year, y = annual_maximum)) +
+  geom_line() +
+  geom_smooth(method = "loess", span = 0.2, se= T) +
+  scale_x_continuous(expand = c(0,0)) +
+  labs(x= "", y ="HQ [m³/s]") +
+  theme(plot.title = element_text(hjust = 0.5), text = element_text(size = 30),
+        plot.margin = unit(c(1,1,1,1), "cm")
+        ) +
+  ggtitle("HQs mit Smooth")
+  
+
+# Lowflow
+plot(NM7Q$year, NM7Q$NM7Q, type = "l")
+l2 <- loess(NM7Q$NM7Q ~ NM7Q$year, span = 0.15)
+lines(l2$x, l2$fitted, col = "red")
+
+
+ggplot(NM7Q, aes(x = year, y = NM7Q)) +
+  geom_line() +
+  geom_smooth(method = "loess", span = 0.2, se= T) +
+  scale_x_continuous(expand = c(0,0)) +
+  labs(x= "", y ="NM7Q [m³/s]") +
+  theme(plot.title = element_text(hjust = 0.5), text = element_text(size = 30),
+        plot.margin = unit(c(1,1,1,1), "cm")) +
+  ggtitle("NM7Qs mit Smooth")
+#-------------------------------------------------------------------------------
+# C) 
+#-------------------------------------------------------------------------------
+
+# Decomposition
+
+
+
+
+dev.off()
+par(mfrow = c(1,2))
+pfinz_dec <- decompose(ts(Pfinz$Q,start=c(1960,304),frequency=365))
+### plot decomposed time series
+plot(pfinz_dec, cex.main = 2, cex.axis = 2.0, cex.lab = 1.5)
+
+norm_dec <- decompose(ts(norm_data$norm_Q,start=c(1960, 304),frequency=365))
+plot(norm_dec)
+
+plot(norm_data$norm_Q)
+
+#pluviales system -> im gegensatz zu nivalen systemen deutlich schwächere saisonalität
+# daher nicht möglich richtig rauszufiltern
+
+
+# Daten normalisieren -> saisonalen Zyklus entfernen
+# Monatsmittel (zuvor berechnet) auf jeden Monatstag anwenden -> alle Tage haben
+# gleichen Abluss -> stationäre Daten
+
+
+#mit tagesmitteln, nichtmontasmitteln
+norm_data <- Pfinz[,-c(5,6)]
+norm_data <- left_join(norm_data, monthly_mean)
+norm_data$norm_Q <- norm_data$Q - norm_data$month_Q
+
+
+
+Pfinz$day <- day(Pfinz$date)
+daily_mean <- Pfinz %>% group_by(month,day) %>% 
+  summarise(day_Q = meanNA(Q))
+
+norm_data <- Pfinz[,-c(5,6)]
+norm_data <- left_join(norm_data, daily_mean)
+norm_data$norm_Q <- norm_data$Q - norm_data$day_Q
+
+dev.off()
+par(mfrow = c(1,2), mar = c(5,5,5,5))
+acf_Q <- acf(norm_data$norm_Q, lag.max = 50,
+             cex.axis = 2.0, cex.lab = 2,
+             main = "ACF")
+pacf_Q <- pacf(norm_data$norm_Q, lag.max = 50)
+
+acf_Q <- acf(norm_data$norm_Q, lag.max = 300, cex.main = 5)
+
+par(cex.main = 3, cex.lab  = 2, cex.axis = 2,
+    mfrow = c(1,2), mar = c(5,5,5,5))
+plot(acf_Q, main = "ACF Analyse", lwd = 3)
+abline(h=0.013, col = "blue", lty = 2, lwd = 3)
+abline(h=-0.013, col = "blue", lty = 2, lwd = 3)
+plot(pacf_Q, main = "PACF Analyse", lwd = 3)
+abline(h=0.013, col = "blue", lty = 2, lwd = 3)
+abline(h=-0.013, col = "blue", lty = 2, lwd = 3)
+#-------------------------------------------------------------------------------
+# d
+#-------------------------------------------------------------------------------
+ggplot(data = Pfinz, aes(x = date, y = Q)) +
+  geom_smooth() +
+  geom_smooth(method = "lm", col = "red") 
+  ylim(0,5)
+  
+
+ggplot(data = monthly_mean, aes(x = year, y = year_Q))+
+  geom_line() +
+  geom_smooth()
+# Hypothesen
+
+# keine starke veränderung von high und low flow
+ # visualisierung mit trendlinie der gesamtdaten -> kein merkliicher unterschied
+ # erhöhte Abflüsse zwischen Dez-May
+ # verminderte Abflüsse zwischen Jun-Nov
+  # kein changepoint
+
+################################################################################
+# Task 2
+################################################################################
+
+# Change point test
+cp_pettit <- pettitt.test(annual_max$annual_maximum)
+cp_pettit
+
+plot(annual_max$year,annual_max$annual_maximum,type='l',xlab='',
+     ylab='Abfluss (m³/s)',main='Pfinz Berghausen AM - Change & Trends', lwd = 2)
+abline(v=annual_max$year[cp_pettit$estimate],col='red', lwd = 2)
+abline(lm_Q1, col = "blue", lwd = 2)
+legend("topleft", legend = c("Changepoint", "Trend"), col = c("red", "blue"), lty = 1, bty = "n")
+
+
+# Non-parametric trend test (e.g. Mann-Kendall)
+mk_Q1 <- mk.test(annual_max$annual_maximum)
+mk_Q1
+
+# Parametric trend test (regression with time as a covariate)
+lm_Q1 <- lm(annual_max$annual_maximum ~ annual_max$year)
+summary(lm_Q1)$coefficients
+
+
+
+
+
+################################################################################
+# Task 3
+################################################################################
+
+
+#-------------------------------------------------------------------------------
+# a) Distribution and goodness of fit
+#-------------------------------------------------------------------------------
+# High Flow
+#GEV distribution for annual maxima
+gev_am <- gev.fit(xdat=annual_max$annual_maximum)
+gev.diag(gev_am)
+### Kolmogorov-Smirnov test
+ks_p_values_am <- c()
+for (i in 1:1000) {
+  ks <- ks.test(annual_max$annual_maximum,rgev(n=length(annual_max$annual_maximum),loc=gev_am$mle[1],scale=gev_am$mle[2],gev_am$mle[3]))
+  ks_p_values_am[i] <- ks$p.value
+}
+plot(1:1000,sort(ks_p_values_am))
+mean(ks_p_values_am)
+which(ks_p_values_am < 0.05)
+### Anderson-Darling test
+ad <- goftest::ad.test(annual_max$annual_maximum,pgev,loc=gev_am$mle[1],scale=gev_am$mle[2],gev_am$mle[3])
+ad$p.value 
+### Cramer-von Mises test
+cvm <- goftest::cvm.test(annual_max$annual_maximum,pgev,loc=gev_am$mle[1],scale=gev_am$mle[2],gev_am$mle[3])
+cvm$p.value
+
+
+
+#-------------------------------------------------------------------------------
+# Low Flow
+#GEV distribution for annual maxima
+gev_NM7Q <- gev.fit(xdat=NM7Q$NM7Q)
+gev.diag(gev_NM7Q)
+
+### Kolmogorov-Smirnov test
+ks_p_values_NM7Q <- c()
+for (i in 1:1000) {
+  ks <- ks.test(NM7Q$NM7Q,rgev(n=length(NM7Q$NM7Q),loc=gev_NM7Q$mle[1],scale=gev_NM7Q$mle[2],gev_NM7Q$mle[3]))
+  ks_p_values_NM7Q[i] <- ks$p.value
+}
+plot(1:1000,sort(ks_p_values_NM7Q))
+mean(ks_p_values_NM7Q)
+length(which(ks_p_values_NM7Q < 0.05))
+1- 23/1000
+### Anderson-Darling test
+ad <- goftest::ad.test(NM7Q$NM7Q,pgev,loc=gev_NM7Q$mle[1],scale=gev_NM7Q$mle[2],gev_NM7Q$mle[3])
+ad$p.value 
+### Cramer-von Mises test
+cvm <- goftest::cvm.test(NM7Q$NM7Q,pgev,loc=gev_NM7Q$mle[1],scale=gev_NM7Q$mle[2],gev_NM7Q$mle[3])
+cvm$p.value 
+
+
+
+#-------------------------------------------------------------------------------
+# b) Frequency analysis
+# Using the GEV-Distribution to determine Magnitude of given return Periods
+prob <- pgev(q=annual_max$annual_maximum,loc=gev_am$mle[1],scale=gev_am$mle[2],gev_am$mle[3])
+rp <- 1/(1-prob)
+plot(annual_max$annual_maximum, rp, xlab='Magnitude',ylab='Return period',main='High flow frequency curve')
+
+
+prob <- pgev(q=NM7Q$NM7Q,loc=gev_NM7Q$mle[1],scale=gev_NM7Q$mle[2],gev_NM7Q$mle[3])
+rp <- 1/prob
+plot(NM7Q$NM7Q, rp, xlab='Magnitude',ylab='Return period',main='Low flow frequency curve')
+
+
+
+# Überschreitungskurven!!!!
+
+rp <- c(10,20,50,100)
+flood_estimate <- c()
+
+for (i in 1:length(rp)) {
+  prob <- 1-(1/rp[i])
+  flood_estimate[i] <- quantile_gev <- qgev(p = prob, loc = gev_am$mle[1], scale = gev_am$mle[2], gev_am$mle[3])
+
+}
+
+
+# same for Lowflow_estimates
+lowflow_estimate <- c()
+for (i in 1:length(rp)) {
+  prob <- (1/rp[i])
+  lowflow_estimate[i] <- quantile_gev <- qgev(p = prob, loc = gev_NM7Q$mle[1], scale = gev_NM7Q$mle[2], gev_NM7Q$mle[3])
+  
+}
+lowflow_estimate
+
+#-------------------------------------------------------------------------------
+# c) Non-stationarity
+
+# Daten in frühe und späte Phase aufteilen
+gev_am_early <- gev.fit(xdat=annual_max$annual_maximum[1:30])
+gev_am_late <- gev.fit(xdat=annual_max$annual_maximum[31:61])
+gev_NM7Q_early <- gev.fit(xdat=NM7Q$NM7Q[1:30])
+gev_NM7Q_late <- gev.fit(xdat=NM7Q$NM7Q[31:61])
+
+
+flood_estimate_early <- c()
+flood_estimate_late <- c()
+lowflow_estimate_early <- c()
+lowflow_estimate_late <- c()
+
+rp <- c(10,20,50,100)
+
+# flood_estimate_early
+for (i in 1:length(rp)) {
+  prob <- 1-(1/rp[i])
+  flood_estimate_early[i] <- quantile_gev <- qgev(p = prob, loc = gev_am_early$mle[1], scale = gev_am_early$mle[2], gev_am_early$mle[3])
+  
+}
+
+# flood_estimate_late
+for (i in 1:length(rp)) {
+  prob <- 1-(1/rp[i])
+  flood_estimate_late[i] <- quantile_gev <- qgev(p = prob, loc = gev_am_late$mle[1], scale = gev_am_late$mle[2], gev_am_late$mle[3])
+  
+}
+
+# lowflow_estimate_early
+for (i in 1:length(rp)) {
+  prob <- (1/rp[i])
+  lowflow_estimate_early[i] <- quantile_gev <- qgev(p = prob, loc = gev_NM7Q_early$mle[1], scale = gev_NM7Q_early$mle[2], gev_NM7Q_early$mle[3])
+  
+}
+# lowflow_estimate_late
+for (i in 1:length(rp)) {
+  prob <- (1/rp[i])
+  lowflow_estimate_late[i] <- quantile_gev <- qgev(p = prob, loc = gev_NM7Q_late$mle[1], scale = gev_NM7Q_late$mle[2], gev_NM7Q_late$mle[3])
+  
+}
+
+par(mfrow = c(1,2))
+plot(rp,flood_estimate, type="b", lty = 2, pch = 19, ylim = c(20,160), 
+     xlab = "Jährlichkeit [y]",  ylab= "Abfluss [m³/s]", main = "Jährlichkeiten Highflow")
+lines(rp,flood_estimate_early, col="red", type = "b", lty = 2, pch = 19)
+lines(rp,flood_estimate_late, col="blue", type = "b", lty = 2, pch = 19)
+legend("topleft", lty = 2, legend = c("1960-1990 (early)", "1990-2020 (late)", "1960-2020"),
+       col = c( "red", "blue", "black"), cex= 0.8, bty = "n", pch = 19)
+
+
+plot(rp,lowflow_estimate, las=2, type="b", lty = 2, pch = 19, ylim= c(0.2,0.5), 
+     xlab = "Jährlichkeit [y]", ylab= "Abfluss [m³/s]", main = "Jährlichkeiten Lowflow")
+lines(rp,lowflow_estimate_early, col="red", type = "b", lty = 2, pch = 19)
+lines(rp,lowflow_estimate_late, col="blue", type = "b", lty = 2, pch = 19)
+
+
+# mal schauen wie sinnvoll das hier ist
+#------
+sum(Pfinz$Q)
+a <- sum(Pfinz$Q[1:(length(Pfinz$Q)/2)])
+b <- sum(Pfinz$Q[(length(Pfinz$Q)/2):length(Pfinz$Q)])
+a+b
+
+Pfinz$date[(length(Pfinz$Q)/2):length(Pfinz$Q)]
+Abflussbarplot <- data.frame("1960-2020" = sum(Pfinz$Q), "1960-1990" = a, "1990-2020" = (sum(Pfinz$Q)-a))
+Abflussbarplot <- as.matrix(Abflussbarplot)
+barplot(Abflussbarplot, col = rgb(0.2,0.3,0.4))
+# mal schauen wie sinnvoll das hier ist
+################################################################################
+# Task 4
+################################################################################
+month_pivot <- monthly_mean[,1:3]
+indexmat <- month_pivot %>% 
+  pivot_wider(names_from = month, values_from = month_Q) %>% 
+  left_join(NM7Q) %>% 
+  left_join(annual_max[,-3])
+indexmat <- as.data.frame(indexmat)
+rownames(indexmat) <- indexmat$year
+indexmat <- indexmat[,-1]
+
+#plotten
+pca <- prcomp(indexmat, scale = T)
+par(mfrow=c(1,1))
+par(las=2)
+barplot(pca$sde^2/sum(pca$sdev^2), names=paste("PC",c(1:length(pca$sde)), sep=""),
+        ylab="explained variance")
+
+#erklärte varainz mit ersten 2 bzw 3 PCAs
+sum(pca$sde[1:2]^2/sum(pca$sdev^2))
+sum(pca$sde[1:3]^2/sum(pca$sdev^2))
+sum(pca$sde[1:4]^2/sum(pca$sdev^2))
+
+
+biplot(pca)
+
+loadings <- pca$rotation
+loadings[,c(1,2)]
+
+par(mfrow=c(2,2),las=2)
+barplot(loadings[,c(1)],main='PC 1')
+barplot(loadings[,c(2)],main='PC 2') 
+barplot(loadings[,c(3)],main='PC 3')
+barplot(loadings[,c(4)],main='PC 4')
+
+
+par(mfrow=c(1,1))
+plot(1:14, loadings[,1], ylim = c(-0.6,0.7),
+     type = "l", xlab="", ylab = "loadings", xaxt = "n", lwd = 2)
+lines(1:14, loadings[,2], col="red", lwd = 2)
+lines(1:14, loadings[,3], col="blue", lwd = 2)
+lines(1:14, loadings[,4], col="darkgreen", lwd = 2)
+axis(1, at = 1:14, labels = c(month.abb, "NM7Q", "HQ"))
+
+
+#-------------------------------------------------------------------------------
+# c)
+
+scores <- pca$x
+head(scores[,1])
+
+par(mfrow=c(1,1))
+plot(1960:2020, scores[,1],
+     type = "l", xlab="", ylab = "PCA Scores", lwd = 2)
+lines(1960:2020, scores[,2], col="red", lwd = 2)
+lines(1960:2020, scores[,3], col="blue", lwd = 2)
+lines(1960:2020, scores[,4], col="darkgreen", lwd = 2)
+legend("topright", legend = c("PC1", "PC2", "PC3", "PC4"), 
+       lty = 1, col = c("black","red","blue","darkgreen"), cex = 0.6)
+
+?"legend"
